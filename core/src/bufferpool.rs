@@ -13,10 +13,10 @@ pub struct PageAddr {
     page_id: u64,
 }
 
-pub struct BufferSlot {
-    pub page_address: PageAddr,
-    pub page_data: [u8; PAGE_SIZE as usize],
-    is_dirty: bool,
+pub(crate) struct BufferSlot {
+    pub(crate) page_address: PageAddr,
+    pub(crate) page_data: [u8; PAGE_SIZE],
+    pub(crate) is_dirty: bool,
 }
 
 pub struct BufferPool {
@@ -77,7 +77,7 @@ impl<'a> BufferPool {
         })
     }
 
-    pub fn pin_read(&self, page_address: PageAddr) -> Result<RwLockReadGuard<'_, Box<BufferSlot>>, std::io::Error> {
+    pub(crate) fn pin_read(&self, page_address: PageAddr) -> Result<RwLockReadGuard<'_, Box<BufferSlot>>, std::io::Error> {
         loop {
             // Fast path: check if page is already in the map
             if let Some(map_guard) = self.page_to_slot.get(&page_address) {
@@ -99,7 +99,7 @@ impl<'a> BufferPool {
         }
     }
 
-    pub fn pin_write(&self, page_address: PageAddr) -> Result<RwLockWriteGuard<'_, Box<BufferSlot>>, std::io::Error> {
+    pub(crate) fn pin_write(&self, page_address: PageAddr) -> Result<RwLockWriteGuard<'_, Box<BufferSlot>>, std::io::Error> {
         loop {
             // Fast path: check if page is already in the map
             if let Some(map_guard) = self.page_to_slot.get(&page_address) {

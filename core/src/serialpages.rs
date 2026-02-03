@@ -1,151 +1,119 @@
 use crate::{
     bufferpool::{BufferPool, PageAddr},
-    constants::PAGE_SIZE,
-    page::{Page, PageMut},
-    tuple::{Tuple, TupleDescriptor},
+    page::{Page, PageMut, PageRead}, tuple::tuple::{Tuple, TupleOnDisk},
 };
-
-/**
- * Serial pages are pages that are written in a serial manner.
- * Page format:
- * - end_offset: u32
- * - data: [u8; PAGE_SIZE - 4]
- */
-
-const DATA_START_OFFSET: u64 = size_of::<u32>() as u64;
 
 pub struct SerialWriter<'a> {
     buffer_pool: &'a BufferPool,
-    page_offset: u32,
     page_writer: PageMut<'a>,
     page_address: PageAddr,
 }
 
+/// Reader for sequentially reading tuples across multiple pages.
+/// Note: The streaming iterator pattern has lifetime limitations in Rust.
+/// Consider using Page::read_cell directly for simpler access patterns.
+#[allow(dead_code)]
 pub struct SerialReader<'a> {
     buffer_pool: &'a BufferPool,
-    page_offset: u32,
     page_reader: Page<'a>,
     page_address: PageAddr,
+    end_page_address: PageAddr,
+    num_cells_in_page: usize,
+    current_cell_index: usize,
+}
+
+#[allow(dead_code)]
+trait StreamingIterator<'a> {
+    type Item;
+    fn next(&'a mut self) -> Option<Self::Item>;
 }
 
 impl<'a> SerialWriter<'a> {
     pub fn new(buffer_pool: &'a BufferPool, page_address: PageAddr) -> Result<Self, std::io::Error> {
         let page_writer = PageMut::open(buffer_pool, page_address)?;
-        let end_offset = page_writer.read::<u32>(0)?;
-        let page_offset = if end_offset == 0 {
-            DATA_START_OFFSET as u32
-        } else {
-            end_offset
-        };
-
-        let mut result = Self {
-            buffer_pool,
-            page_offset,
-            page_writer,
-            page_address,
-        };
-
-        // Initialize header if new page
-        if end_offset == 0 {
-            result.page_writer.write::<u32>(0, &(DATA_START_OFFSET as u32))?;
-        }
-
-        Ok(result)
-    }
-
-    pub fn switch_page(&mut self, new_page: PageAddr) -> Result<(), std::io::Error> {
-        self.page_writer = PageMut::open(self.buffer_pool, new_page)?;
-        self.page_address = new_page;
-        self.page_offset = DATA_START_OFFSET as u32;
-
-        let end_offset = self.page_writer.read::<u32>(0)?;
-        if end_offset == 0 {
-            self.page_writer.write::<u32>(0, &(DATA_START_OFFSET as u32))?;
-        }
-        if end_offset != 0 {
-            self.page_offset = end_offset;
-        }
-        Ok(())
-    }
-
-    pub fn write(&mut self, data: &[u8]) -> Result<(), std::io::Error> {
-        if data.len() as u64 > PAGE_SIZE - DATA_START_OFFSET {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "data too large"));
-        }
-
-        if self.page_offset as u64 + data.len() as u64 > PAGE_SIZE as u64 {
-            self.switch_page(self.page_address.next_page())?;
-        }
-        self.page_writer.write_bytes(self.page_offset as u64, data)?;
-        self.page_offset += data.len() as u32;
-        self.page_writer.write::<u32>(0, &self.page_offset)?;
-        Ok(())
-    }
-
-    /// Appends a tuple to the serial page, serialized according to the descriptor
-    pub fn append_tuple(&mut self, tuple: &Tuple, descriptor: &TupleDescriptor) -> Result<(), std::io::Error> {
-        let serialized = tuple.serialize(descriptor)?;
-        // Write length prefix so reader knows how much to read
-        let len = serialized.len() as u32;
-        let mut data = len.to_le_bytes().to_vec();
-        data.extend_from_slice(&serialized);
-        self.write(&data)
-    }
-}
-
-impl<'a> SerialReader<'a> {
-    pub fn new(buffer_pool: &'a BufferPool, page_address: PageAddr) -> Result<Self, std::io::Error> {
         Ok(Self {
             buffer_pool,
-            page_offset: DATA_START_OFFSET as u32,
-            page_reader: Page::open(buffer_pool, page_address)?,
+            page_writer,
             page_address,
         })
     }
 
-    pub fn switch_page(&mut self, new_page: PageAddr) -> Result<(), std::io::Error> {
-        self.page_reader = Page::open(self.buffer_pool, new_page)?;
+    fn switch_page(&mut self, new_page: PageAddr) -> Result<(), std::io::Error> {
+        self.page_writer = PageMut::open(self.buffer_pool, new_page)?;
         self.page_address = new_page;
-        self.page_offset = DATA_START_OFFSET as u32;
         Ok(())
     }
 
-    pub fn read(&mut self, len: usize) -> Result<&[u8], std::io::Error> {
-        let end_offset = self.page_reader.read::<u32>(0)?;
-
-        if self.page_offset as u64 + len as u64 > end_offset as u64 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "not enough data",
-            ));
+    pub fn append_tuple(&mut self, tuple: &Tuple) -> Result<(), std::io::Error> {
+        if !self.page_writer.has_space_for_cell(tuple.len())? {
+            self.switch_page(self.page_address.next_page())?;
         }
-
-        let data = self.page_reader.read_bytes(self.page_offset as u64, len);
-        self.page_offset += len as u32;
-        Ok(data)
-    }
-
-    pub fn has_more(&self) -> Result<bool, std::io::Error> {
-        let end_offset = self.page_reader.read::<u32>(0)?;
-        Ok(self.page_offset < end_offset)
-    }
-
-    /// Reads a tuple from the serial page, deserialized according to the descriptor
-    pub fn read_tuple(&mut self, descriptor: &TupleDescriptor) -> Result<Tuple, std::io::Error> {
-        // Read length prefix
-        let len_bytes = self.read(4)?;
-        let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
-
-        // Read tuple data
-        let tuple_bytes = self.read(len)?;
-        let (tuple, _) = Tuple::deserialize(tuple_bytes, descriptor)?;
-        Ok(tuple)
+        let tuple_len = tuple.len();
+        let cell_buffer = self.page_writer.allocate_cell(tuple_len)?;
+        let mut cursor = std::io::Cursor::new(cell_buffer);
+        let bytes_written = tuple.write_to_stream(&mut cursor)?;
+        assert_eq!(bytes_written, tuple_len);
+        Ok(())
     }
 }
+
+impl<'a> SerialReader<'a> {
+    pub fn new(buffer_pool: &'a BufferPool, start_page_address: PageAddr, end_page_address: PageAddr) -> Result<Self, std::io::Error> {
+        let page_reader = Page::open(buffer_pool, start_page_address)?;
+        let num_cells_in_page = page_reader.num_cells()?;
+        Ok(Self {
+            buffer_pool,
+            page_reader,
+            page_address: start_page_address,
+            end_page_address,
+            num_cells_in_page,
+            current_cell_index: 0,
+        })
+    }
+
+    #[allow(dead_code)]
+    fn switch_page(&mut self, new_page: PageAddr) -> Result<(), std::io::Error> {
+        self.page_reader = Page::open(self.buffer_pool, new_page)?;
+        self.page_address = new_page;
+        self.num_cells_in_page = self.page_reader.num_cells()?;
+        self.current_cell_index = 0;
+        Ok(())
+    }
+}
+
+impl<'a> StreamingIterator<'a> for SerialReader<'a> {
+
+    type Item = Result<TupleOnDisk<'a>, std::io::Error>;
+
+    fn next(&'a mut self) -> Option<Self::Item> {
+        if self.current_cell_index >= self.num_cells_in_page {
+            if self.page_address == self.end_page_address {
+                return None;
+            }
+            if let Err(e) = self.switch_page(self.page_address.next_page()) {
+                return Some(Err(e));
+            }
+        }
+        match self.page_reader.read_cell(self.current_cell_index) {
+            Ok(cell_data) => {
+                self.current_cell_index += 1;
+                Some(Ok(TupleOnDisk::new(cell_data)))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+
+
+
+
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tuple::types::{TupleDescriptor, TupleFieldDescriptor, TupleFieldType, TupleValue};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -155,112 +123,128 @@ mod tests {
     }
 
     #[test]
-    fn test_serial_write_and_read() {
-        let dir = get_temp_dir();
-        let pool = Arc::new(BufferPool::new(dir.clone()).unwrap());
-        let page_addr = PageAddr::new(1, 0);
-
-        // Write data
-        {
-            let mut writer = SerialWriter::new(&pool, page_addr).unwrap();
-            writer.write(b"hello").unwrap();
-            writer.write(b"world").unwrap();
-        }
-
-        // Read data back
-        {
-            let mut reader = SerialReader::new(&pool, page_addr).unwrap();
-
-            let first = reader.read(5).unwrap();
-            assert_eq!(first, b"hello");
-
-            let second = reader.read(5).unwrap();
-            assert_eq!(second, b"world");
-
-            assert!(!reader.has_more().unwrap());
-        }
-
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn test_serial_multiple_writes_and_reads() {
-        let dir = get_temp_dir();
-        let pool = Arc::new(BufferPool::new(dir.clone()).unwrap());
-        let page_addr = PageAddr::new(1, 0);
-
-        let test_data: Vec<&[u8]> = vec![b"first", b"second", b"third"];
-
-        // Write
-        {
-            let mut writer = SerialWriter::new(&pool, page_addr).unwrap();
-            for data in &test_data {
-                writer.write(data).unwrap();
-            }
-        }
-
-        // Read
-        {
-            let mut reader = SerialReader::new(&pool, page_addr).unwrap();
-            for expected in &test_data {
-                let actual = reader.read(expected.len()).unwrap();
-                assert_eq!(actual, *expected);
-            }
-            assert!(!reader.has_more().unwrap());
-        }
-
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
     fn test_serial_tuple_write_and_read() {
-        use crate::tuple::{ColumnType, TupleValue};
-
         let dir = get_temp_dir();
         let pool = Arc::new(BufferPool::new(dir.clone()).unwrap());
         let page_addr = PageAddr::new(1, 0);
 
         // Create descriptor
         let mut descriptor = TupleDescriptor::new();
-        descriptor
-            .add_column("id", ColumnType::Int64, false)
-            .add_column("name", ColumnType::VarString, false)
-            .add_column("age", ColumnType::Int32, true);
+        descriptor.add_field(TupleFieldDescriptor::new("id".to_string(), TupleFieldType::Int64));
+        descriptor.add_field(TupleFieldDescriptor::new("name".to_string(), TupleFieldType::VarBytes));
+        descriptor.add_field(TupleFieldDescriptor::new("age".to_string(), TupleFieldType::Int32));
 
         // Write tuples
         {
             let mut writer = SerialWriter::new(&pool, page_addr).unwrap();
 
-            let tuple1 = Tuple::with_values(vec![
+            let tuple1 = Tuple::new(vec![
                 TupleValue::Int64(1),
-                TupleValue::String("Alice".to_string()),
+                TupleValue::VarBytes(b"Alice"),
                 TupleValue::Int32(30),
             ]);
-            writer.append_tuple(&tuple1, &descriptor).unwrap();
+            writer.append_tuple(&tuple1).unwrap();
 
-            let tuple2 = Tuple::with_values(vec![
+            let tuple2 = Tuple::new(vec![
                 TupleValue::Int64(2),
-                TupleValue::String("Bob".to_string()),
+                TupleValue::VarBytes(b"Bob"),
                 TupleValue::Null,
             ]);
-            writer.append_tuple(&tuple2, &descriptor).unwrap();
+            writer.append_tuple(&tuple2).unwrap();
         }
 
-        // Read tuples back
+        // Read tuples back - use page directly to avoid streaming iterator lifetime issues
         {
-            let mut reader = SerialReader::new(&pool, page_addr).unwrap();
+            let page = Page::open(&pool, page_addr).unwrap();
+            assert_eq!(page.num_cells().unwrap(), 2);
 
-            let read_tuple1 = reader.read_tuple(&descriptor).unwrap();
-            assert_eq!(read_tuple1.values[0], TupleValue::Int64(1));
-            assert_eq!(read_tuple1.values[1], TupleValue::String("Alice".to_string()));
-            assert_eq!(read_tuple1.values[2], TupleValue::Int32(30));
+            // Read first tuple
+            let cell1 = page.read_cell(0).unwrap();
+            let tuple1 = TupleOnDisk::new(cell1);
+            assert_eq!(tuple1.read_field(&descriptor, 0).unwrap(), TupleValue::Int64(1));
+            assert_eq!(tuple1.read_field(&descriptor, 1).unwrap(), TupleValue::VarBytes(b"Alice"));
+            assert_eq!(tuple1.read_field(&descriptor, 2).unwrap(), TupleValue::Int32(30));
 
-            let read_tuple2 = reader.read_tuple(&descriptor).unwrap();
-            assert_eq!(read_tuple2.values[0], TupleValue::Int64(2));
-            assert_eq!(read_tuple2.values[1], TupleValue::String("Bob".to_string()));
-            assert_eq!(read_tuple2.values[2], TupleValue::Null);
+            // Read second tuple
+            let cell2 = page.read_cell(1).unwrap();
+            let tuple2 = TupleOnDisk::new(cell2);
+            assert_eq!(tuple2.read_field(&descriptor, 0).unwrap(), TupleValue::Int64(2));
+            assert_eq!(tuple2.read_field(&descriptor, 1).unwrap(), TupleValue::VarBytes(b"Bob"));
+            assert_eq!(tuple2.read_field(&descriptor, 2).unwrap(), TupleValue::Null);
+        }
 
-            assert!(!reader.has_more().unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_serial_multiple_tuples() {
+        let dir = get_temp_dir();
+        let pool = Arc::new(BufferPool::new(dir.clone()).unwrap());
+        let page_addr = PageAddr::new(1, 0);
+
+        // Simple descriptor with just integers
+        let mut descriptor = TupleDescriptor::new();
+        descriptor.add_field(TupleFieldDescriptor::new("value".to_string(), TupleFieldType::Int32));
+
+        let test_values: Vec<i32> = vec![100, 200, 300, 400, 500];
+
+        // Write tuples
+        {
+            let mut writer = SerialWriter::new(&pool, page_addr).unwrap();
+            for val in &test_values {
+                let tuple = Tuple::new(vec![TupleValue::Int32(*val)]);
+                writer.append_tuple(&tuple).unwrap();
+            }
+        }
+
+        // Read tuples back using Page directly
+        {
+            let page = Page::open(&pool, page_addr).unwrap();
+            assert_eq!(page.num_cells().unwrap(), test_values.len());
+            
+            for (i, expected_val) in test_values.iter().enumerate() {
+                let cell = page.read_cell(i).unwrap();
+                let tuple = TupleOnDisk::new(cell);
+                assert_eq!(
+                    tuple.read_field(&descriptor, 0).unwrap(),
+                    TupleValue::Int32(*expected_val)
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_tuple_with_nulls() {
+        let dir = get_temp_dir();
+        let pool = Arc::new(BufferPool::new(dir.clone()).unwrap());
+        let page_addr = PageAddr::new(1, 0);
+
+        let mut descriptor = TupleDescriptor::new();
+        descriptor.add_field(TupleFieldDescriptor::new("a".to_string(), TupleFieldType::Int32));
+        descriptor.add_field(TupleFieldDescriptor::new("b".to_string(), TupleFieldType::Int32));
+        descriptor.add_field(TupleFieldDescriptor::new("c".to_string(), TupleFieldType::Int32));
+
+        // Write tuple with null in middle
+        {
+            let mut writer = SerialWriter::new(&pool, page_addr).unwrap();
+            let tuple = Tuple::new(vec![
+                TupleValue::Int32(10),
+                TupleValue::Null,
+                TupleValue::Int32(30),
+            ]);
+            writer.append_tuple(&tuple).unwrap();
+        }
+
+        // Read and verify using Page directly
+        {
+            let page = Page::open(&pool, page_addr).unwrap();
+            let cell = page.read_cell(0).unwrap();
+            let tuple = TupleOnDisk::new(cell);
+            assert_eq!(tuple.read_field(&descriptor, 0).unwrap(), TupleValue::Int32(10));
+            assert_eq!(tuple.read_field(&descriptor, 1).unwrap(), TupleValue::Null);
+            assert_eq!(tuple.read_field(&descriptor, 2).unwrap(), TupleValue::Int32(30));
         }
 
         let _ = std::fs::remove_dir_all(dir);

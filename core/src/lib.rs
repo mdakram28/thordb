@@ -1,16 +1,20 @@
+// Public API
 pub mod bufferpool;
-pub mod constants;
+pub mod lsm;
 pub mod page;
-pub mod pagefile;
-pub mod serialize;
 pub mod serialpages;
 pub mod tuple;
+
+// Internal modules
+pub(crate) mod constants;
+pub(crate) mod pagefile;
 
 use std::{sync::Arc, thread};
 
 use crate::constants::BG_FLUSH_INTERVAL_MS;
 
 pub struct ThorDB {
+    #[allow(dead_code)] // Will be used for database operations
     buffer_pool: Arc<bufferpool::BufferPool>,
     bg_flush_thread: Option<std::thread::JoinHandle<()>>,
 }

@@ -6,12 +6,12 @@ use parking_lot::Mutex;
 
 use crate::constants::PAGE_SIZE;
 
-pub struct PageFile {
+pub(crate) struct PageFile {
     file_handle: Mutex<File>,
 }
 
 impl PageFile {
-    pub fn new(file: &PathBuf) -> Result<Self, std::io::Error> {
+    pub(crate) fn new(file: &PathBuf) -> Result<Self, std::io::Error> {
         let file_handle = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -22,11 +22,11 @@ impl PageFile {
         })
     }
 
-    pub fn read_page(&self, page_id: u64, buffer: &mut [u8], create: bool) -> Result<(), std::io::Error> {
-        let offset = page_id * PAGE_SIZE;
+    pub(crate) fn read_page(&self, page_id: u64, buffer: &mut [u8], create: bool) -> Result<(), std::io::Error> {
+        let offset = page_id * PAGE_SIZE as u64;
         tracing::info!("Reading page {}", page_id);
         self.file_handle.lock().read_at(buffer, offset).map(|bytes| {
-            if bytes as u64 != PAGE_SIZE {
+            if bytes as u64 != PAGE_SIZE as u64 {
                 if create {
                     buffer.fill(0);
                 } else {
@@ -36,13 +36,13 @@ impl PageFile {
         })
     }
 
-    pub fn write_page(&self, page_id: u64, buffer: &[u8]) -> Result<(), std::io::Error> {
+    pub(crate) fn write_page(&self, page_id: u64, buffer: &[u8]) -> Result<(), std::io::Error> {
         assert!(buffer.len() == PAGE_SIZE as usize);
         tracing::info!("Writing page {}", page_id);
 
-        let offset = page_id * PAGE_SIZE;
+        let offset = page_id * PAGE_SIZE as u64;
         self.file_handle.lock().write_at(buffer, offset).map(|bytes| {
-            assert_eq!(bytes as u64, PAGE_SIZE, "Wrote partial page");
+            assert_eq!(bytes as u64, PAGE_SIZE as u64, "Wrote partial page");
         })
     }
 }
