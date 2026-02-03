@@ -16,5 +16,5 @@ mod lsm;
 pub use types::{Key, Value, Entry, SeqNum};
 pub use memtable::MemTable;
 pub use sstable::{SSTableWriter, SSTableReader};
-pub use lsm::LsmTree;
+pub use lsm::{LsmTree, LsmConfig, LsmStats};
 pub use iterator::MergeIterator;

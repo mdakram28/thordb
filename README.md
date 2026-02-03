@@ -160,12 +160,50 @@ for entry in all_versions {
 
 ## Benchmarks
 
-*Coming soon — benchmarks against RocksDB, LevelDB, and Sled*
+Benchmarks run on Apple M-series, comparing ThorDB against RocksDB, Sled, and LevelDB.
 
-Preliminary testing shows:
-- **Write throughput**: ~500K ops/sec (sequential)
-- **Read latency**: <10μs (in-memory), <100μs (on-disk)
-- **Recovery time**: <1s for 1M entries
+### Sequential Writes (1,000 keys, 100B values)
+
+| Database | Time | Throughput |
+|----------|------|------------|
+| **ThorDB** | 3.06 ms | 327 ops/sec |
+| RocksDB | 3.81 ms | 262 ops/sec |
+| Sled | 12.5 ms | 80 ops/sec |
+| LevelDB | 2.08 ms | 480 ops/sec |
+
+### Sequential Writes (10,000 keys, 100B values)
+
+| Database | Time | Throughput |
+|----------|------|------------|
+| **ThorDB** | 28.7 ms | 349 ops/sec |
+| RocksDB | 33.4 ms | 300 ops/sec |
+| Sled | 42.8 ms | 234 ops/sec |
+| LevelDB | 19.5 ms | 512 ops/sec |
+
+### Random Reads (from 10,000 keys)
+
+| Database | Latency | Throughput |
+|----------|---------|------------|
+| LevelDB | 0.83 µs | 1.2M ops/sec |
+| Sled | 0.95 µs | 1.0M ops/sec |
+| RocksDB | 1.24 µs | 800K ops/sec |
+| **ThorDB** | 148 µs | 6.8K ops/sec |
+
+### Mixed Workload (80% reads, 20% writes)
+
+| Database | Time | Throughput |
+|----------|------|------------|
+| **ThorDB** | 1.24 ms | 806 ops/sec |
+| LevelDB | 1.25 ms | 800 ops/sec |
+| RocksDB | 2.03 ms | 493 ops/sec |
+| Sled | 10.2 ms | 98 ops/sec |
+
+> **Note**: ThorDB currently lacks bloom filters and has unoptimized read paths. Read performance improvements are on the roadmap.
+
+Run benchmarks yourself:
+```bash
+cargo bench --bench comparison
+```
 
 ## Project Structure
 
@@ -217,17 +255,23 @@ cargo clippy
 
 ## Roadmap
 
-### v0.2 (Next)
-- [ ] Level-based compaction
+### v0.2 (Next) — Read Performance
 - [ ] Bloom filters for faster negative lookups
-- [ ] Compression support (LZ4)
+- [ ] Block cache for hot data
+- [ ] Read path optimization (100x improvement target)
+- [ ] Large value support (values > page size)
 
-### v0.3
+### v0.3 — Compaction & Compression
+- [ ] Level-based compaction
+- [ ] Size-tiered compaction
+- [ ] LZ4/Zstd compression
+
+### v0.4 — Production Features
 - [ ] Snapshots and iterators
 - [ ] Configurable compaction strategies
 - [ ] Metrics and observability
 
-### v1.0
+### v1.0 — Enterprise Ready
 - [ ] Full ACID transactions
 - [ ] Replication support
 - [ ] Production-ready stability

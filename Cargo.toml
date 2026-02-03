@@ -7,3 +7,22 @@ edition = "2024"
 core = { path = "core" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+tempfile = "3"
+
+# RocksDB - Facebook's LSM engine
+rocksdb = "0.22"
+
+# Sled - Pure Rust embedded database
+sled = "0.34"
+
+# rusty-leveldb - Pure Rust LevelDB implementation
+# (Original LevelDB requires C++ bindings which are harder to set up)
+rusty-leveldb = "3"
+
+[[bench]]
+name = "comparison"
+harness = false
