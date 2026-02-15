@@ -4,7 +4,7 @@
 
 **A blazingly fast, embeddable key-value storage engine written in Rust**
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/akram/thordb/ci.yml?branch=main&style=flat-square)](https://github.com/akram/thordb/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/mdakram28/thordb/ci.yml?branch=main&style=flat-square)](https://github.com/mdakram28/thordb/actions)
 [![Crates.io](https://img.shields.io/crates/v/thordb?style=flat-square)](https://crates.io/crates/thordb)
 [![Documentation](https://img.shields.io/docsrs/thordb?style=flat-square)](https://docs.rs/thordb)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=flat-square)](LICENSE)
@@ -230,7 +230,7 @@ We welcome contributions! Here's how to get started:
 
 ```bash
 # Clone the repository
-git clone https://github.com/akram/thordb.git
+git clone https://github.com/mdakram28/thordb.git
 cd thordb
 
 # Run tests
